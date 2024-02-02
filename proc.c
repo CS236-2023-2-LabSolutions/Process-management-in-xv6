@@ -7,6 +7,8 @@
 #include "proc.h"
 #include "spinlock.h"
 
+int prio_threshold = 1000;
+
 struct {
   struct spinlock lock;
   struct proc proc[NPROC];
@@ -88,6 +90,12 @@ allocproc(void)
 found:
   p->state = EMBRYO;
   p->pid = nextpid++;
+
+  p->inctxt = 0;
+  p->outctxt = 0;
+  p->welc_addr = 0;
+  p->ret_addr = 0;
+  p->prio = 500;
 
   release(&ptable.lock);
 
@@ -202,10 +210,16 @@ fork(void)
 
   // Clear %eax so that fork returns 0 in the child.
   np->tf->eax = 0;
+  np->ret_addr = (char*)(np->tf->eip);
+  if(curproc->welc_addr){
+    np->tf->eip = (uint)(curproc->welc_addr);
+  }
 
-  for(i = 0; i < NOFILE; i++)
-    if(curproc->ofile[i])
+  for(i = 0; i < NOFILE; i++){
+    if(curproc->ofile[i]){
       np->ofile[i] = filedup(curproc->ofile[i]);
+    }
+  }
   np->cwd = idup(curproc->cwd);
 
   safestrcpy(np->name, curproc->name, sizeof(curproc->name));
@@ -333,8 +347,9 @@ scheduler(void)
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->state != RUNNABLE)
+      if(p->state != RUNNABLE || p->prio < prio_threshold){
         continue;
+      }
 
       // Switch to chosen process.  It is the process's job
       // to release ptable.lock and then reacquire it
@@ -343,15 +358,22 @@ scheduler(void)
       switchuvm(p);
       p->state = RUNNING;
 
+      p->inctxt += 1;
+
       swtch(&(c->scheduler), p->context);
       switchkvm();
 
       // Process is done running for now.
       // It should have changed its p->state before coming back.
+      p->outctxt += 1;
+
       c->proc = 0;
     }
+    prio_threshold -= 10;
+    if(prio_threshold < 0){
+      prio_threshold = 1000;
+    }
     release(&ptable.lock);
-
   }
 }
 
@@ -531,4 +553,56 @@ procdump(void)
     }
     cprintf("\n");
   }
+}
+
+
+////////////////////////////////////////////////
+
+int getnumprocs(){
+  struct proc* p;
+  int count = 0;
+  acquire(&ptable.lock);
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    if(p->state != UNUSED){
+      count++;
+    }
+  }
+  release(&ptable.lock);
+  return count;
+}
+
+int getmaxPID(){
+  struct proc* p;
+  int maxpid = -1;
+  acquire(&ptable.lock);
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    if(p->state != UNUSED){
+      if(p->pid > maxpid){
+        maxpid = p->pid;
+      }
+    }
+  }
+  release(&ptable.lock);
+  return maxpid;
+}
+
+int getprocinfo(int pid, struct processInfo* procinfo){
+  struct proc* p;
+  acquire(&ptable.lock);
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    if((p->pid == pid) && (p->state != UNUSED)){
+      if(pid == 1){
+        procinfo->ppid = 0;  
+      }
+      else{
+        procinfo->ppid = (p->parent)->pid;
+      }
+      procinfo->psize = p->sz;
+      procinfo->numberContextSwitches = p->inctxt;
+      release(&ptable.lock);
+      return 0;
+    }
+  }
+  release(&ptable.lock);
+  return -1;
 }

@@ -1,3 +1,5 @@
+#include "processInfo.h"
+
 struct buf;
 struct context;
 struct file;
@@ -120,6 +122,9 @@ void            userinit(void);
 int             wait(void);
 void            wakeup(void*);
 void            yield(void);
+int             getnumprocs();
+int             getmaxPID();
+int             getprocinfo(int pid, struct processInfo* procinfo);
 
 // swtch.S
 void            swtch(struct context**, struct context*);
